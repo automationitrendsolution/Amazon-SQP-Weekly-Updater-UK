@@ -11,3 +11,12 @@ CRON_TZ=Asia/Kolkata
 # Ubuntu / Debian (CRON_TZ is ignored): use New York time instead of the two lines above.
 # 15:00 IST = 04:30 EST (early Nov - mid Mar); change to `30 5` for EDT (mid Mar - early Nov).
 # 30 4 * * 1-5 cd /data/cron/amazon-sqp-weekly-updater-uk && /root/.local/bin/uv run --no-sync python run.py --weekly --apply --quiet >> logs/cron-output.log 2>&1
+
+# Competitors (Seller Central UK Search Query Details) -> BrandAnalytics_Competitor_UK: 3 parts a day, 400 pages each,
+# at 10:00, 13:00 and 16:00 UK time (UK business hours). Needs the one-time sign-in first:
+#   /root/.local/bin/uv run python run.py --sc-login   (asks for the OTP in the terminal; Chrome runs hidden)
+# flock: never two at once. timeout: a part ends in time.
+CRON_TZ=Europe/London
+0 10,13,16 * * * cd /data/cron/amazon-sqp-weekly-updater-uk && flock -n logs/.sc-cron.lock timeout 3h15m /root/.local/bin/uv run --no-sync python run.py --weekly-scrape --quiet >> logs/cron-output.log 2>&1
+# Ubuntu / Debian (no CRON_TZ), New York time (UK and New York change clocks within weeks of each other):
+# 0 5,8,11 * * * ...same command...

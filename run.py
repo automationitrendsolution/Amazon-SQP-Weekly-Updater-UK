@@ -11,13 +11,18 @@ Amazon can keep a report queued for hours. Each report ID is kept in data/state/
 that is cut off or times out (exit 6) carries on with the same reports next time, and
 batches already downloaded to data/reports/ are not requested again.
 
+Competitor data (``--sc-login``, ``--weekly-scrape``) is not in the SP-API: it is read from Seller Central UK's
+Search Query Details pages (top 10 ASINs per search query) in Chrome, with a sign-in saved once by
+``--sc-login``, and inserted into powerbidb.BrandAnalytics_Competitor_UK (never updated or deleted).
+
 Running under cron
 ------------------
 The scheduler (Windows Task Scheduler, deploy/install_task.ps1, or cron, deploy/crontab.example)
 calls ``run.py --weekly --apply --quiet`` every Monday at 15:00 IST for the week that ended on
 Saturday, with backup runs Tuesday-Friday for when Amazon keeps a report queued for a day or
 more. The first run that completes writes the week; later runs find it written and stop at once.
-Overlapping runs are refused by an internal lock (exit 11).
+Overlapping runs are refused by an internal lock (exit 11). ``run.py --weekly-scrape --quiet`` runs
+three times a day, each part opening up to 400 Search Query Details pages of the oldest unfinished week.
 
 Exit codes
 ----------
@@ -25,6 +30,7 @@ Exit codes
     1   unexpected error (see logs/sqp_updater.log)
     2   configuration error
     3   MySQL failed, or a write was rolled back (nothing changed)
+    4   Seller Central sign-in needed, or its page is not as expected
     5   the period is not a valid or available SQP week (Sunday-Saturday)
     6   SP-API request failed, or the report was not ready in time (the next run resumes it)
     7   the report was for another week/marketplace, or had rejected or conflicting rows
@@ -48,6 +54,7 @@ from app.exceptions import ConfigurationError, DatabaseError, PipelineError
 from app.logging_config import append_run, configure_logging, get_logger
 from app.schedule import RunLock, check_available, latest_completed_week, parse_date, today_in, validate_week
 from app.schema import canonical_fields
+from app.schema import quote as schema_quote
 from app.spapi import batch_asins
 
 _HELP_EPILOG = """
@@ -59,8 +66,16 @@ SQP data, Amazon.co.uk (SP-API -> brandanalytics_uk):
   python run.py --weekly                                  the same, as a dry run
   python run.py --period 2026-10-25 2026-10-31 --dry-run --refetch   ask Amazon again (ignore downloads)
 
+Competitor data, Seller Central UK (web scraping -> BrandAnalytics_Competitor_UK):
+  python run.py --sc-login                                sign in once in the terminal (type the OTP), open a
+                                                          test page and save the session; no Chrome window
+  python run.py --weekly-scrape --dry-run --max-pages 20  test: scrape 20 pages, show what would be stored
+  python run.py --weekly-scrape                           scrape up to 400 pages of the oldest unfinished week
+                                                          and store them (cron, 3 times a day)
+  python run.py --weekly-scrape --week 2026-10-25 2026-10-31   the same for one particular week
+
 exit codes:
-  0 success · 1 unexpected · 2 config · 3 MySQL · 5 bad or unavailable week
+  0 success · 1 unexpected · 2 config · 3 MySQL · 4 Seller Central sign-in / page · 5 bad or unavailable week
   6 SP-API failed · 7 malformed report · 11 locked
 """
 
@@ -77,6 +92,17 @@ def build_parser() -> argparse.ArgumentParser:
     modes.add_argument("--inspect", action="store_true", help="Inspect table and ASINs (read-only).")
     modes.add_argument("--period", nargs=2, metavar=("START", "END"), help="Sunday and Saturday, YYYY-MM-DD.")
     modes.add_argument("--weekly", action="store_true", help="Process the latest completed, available week.")
+    modes.add_argument("--sc-login", action="store_true",
+                       help="Seller Central UK: sign in once in the terminal (email/password from .env, you type "
+                            "the OTP), open a test page and save the session. Chrome stays hidden.")
+    modes.add_argument("--weekly-scrape", action="store_true",
+                       help="Competitor data: scrape up to --max-pages Search Query Details pages of the oldest "
+                            "unfinished week (or --week) and store them in BrandAnalytics_Competitor_UK. With "
+                            "--dry-run: show what would be stored; nothing written to MySQL.")
+    parser.add_argument("--week", nargs=2, metavar=("START", "END"),
+                        help="With --weekly-scrape: this week (Sunday and Saturday) instead of the oldest unfinished.")
+    parser.add_argument("--max-pages", type=int, default=400, metavar="N",
+                        help="With --weekly-scrape: new pages to open in this run (default 400, about 3 hours).")
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--dry-run", action="store_true", help="Fetch, validate and preview; never writes.")
     action.add_argument("--apply", action="store_true", help="Write the validated changes to MySQL.")
@@ -97,6 +123,12 @@ def build_parser() -> argparse.ArgumentParser:
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if args.inspect and (args.dry_run or args.apply):
         parser.error("--inspect cannot be combined with --dry-run/--apply")
+    if args.sc_login and (args.dry_run or args.apply):
+        parser.error("--sc-login cannot be combined with --dry-run/--apply")
+    if args.weekly_scrape and args.apply:
+        parser.error("--weekly-scrape stores by itself; use --dry-run to preview")
+    if args.week and not args.weekly_scrape:
+        parser.error("--week is for --weekly-scrape")
     if args.period and not (args.dry_run or args.apply):
         parser.error("--period requires --dry-run or --apply")
     if (args.downloaded_only or args.no_insert) and not args.period:
@@ -145,6 +177,17 @@ def _run(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str
         code, lines = powerbi.inspection(settings, load_asin_list(settings.asin_file))
         print("\n".join(lines))
         return code, "inspected" if code == 0 else "no ASIN column"
+    if args.sc_login:
+        from app import sellercentral
+
+        url, rows = sellercentral.login(settings)
+        print(f"Seller Central: signed in. Check page opened, {rows} competitor rows: {url}\n"
+              f"Session saved for the next runs (copy it to another machine to sign that one in; keep it private): "
+              f"{sellercentral.session_file(settings)}")
+        return 0, f"seller central signed in; check page {rows} rows"
+    if args.weekly_scrape:
+        with RunLock(settings.log_dir / ".sellercentral.lock"):  # one Seller Central run at a time
+            return _scrape(args, settings, logger)
 
     lock = RunLock(settings.log_dir / ".run.lock") if not args.no_lock else None
     if lock:
@@ -154,6 +197,124 @@ def _run(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str
     finally:
         if lock:
             lock.__exit__(None, None, None)
+
+
+def _scrape(args: argparse.Namespace, settings: Settings, logger) -> tuple[int, str]:
+    """--weekly-scrape: the week (--week, else the oldest unfinished one since SC_COMPETITORS_FROM) gets up to
+    --max-pages new pages, then its saved pages are stored, also if Amazon stopped the part early."""
+    from app import competitors
+
+    asins = load_asin_list(settings.asin_file).asins
+    if args.week:
+        start, end = parse_date(args.week[0]), parse_date(args.week[1])
+        validate_week(start, end)
+    else:
+        week = _next_scrape_week(settings, asins, args.dry_run)
+        if week is None:
+            logger.info("Search Query Details: every week is scraped and stored; nothing to do")
+            return 0, "scrape: every week scraped and stored"
+        start, end = week
+    plan = _scrape_plan(settings, start, end, asins)
+    folder = settings.data_dir / "sellercentral" / end.isoformat()
+    total = sum(len(q) for q in plan.values())
+    missing = sum(not competitors.page_file(folder, a, q).is_file() for a, qs in plan.items() for q in qs)
+    if not missing:
+        return _store(args, settings, logger, start, end, asins)
+    logger.info("Search Query Details: week %s..%s, %d of %d pages left; this run opens up to %d", start, end,
+                missing, total, args.max_pages)
+    try:
+        competitors.capture_week(settings, end, plan, folder, max_new=args.max_pages)
+    finally:  # whatever was saved, also when Amazon stopped the part, is stored (or previewed)
+        saved = sum(competitors.page_file(folder, a, q).is_file() for a, qs in plan.items() for q in qs)
+        print(f"{start}..{end}: {saved} of {total} pages saved ({len(plan)} ASINs); {total - saved} left")
+        code, summary = _store(args, settings, logger, start, end, asins)
+    return code, f"scrape {start}..{end} saved={saved}/{total}; {summary}"
+
+
+def _scrape_plan(settings: Settings, start: dt.date, end: dt.date, asins: list[str]) -> dict[str, list[str]]:
+    """Every search query of each ASIN in the week's SQP data, highest search volume first."""
+    from app import competitors
+
+    plan = competitors.queries_for_week(settings, start, end, asins, top=100_000)
+    return {a: q for a, q in plan.items() if q}
+
+
+def _next_scrape_week(settings: Settings, asins: list[str], dry_run: bool) -> tuple[dt.date, dt.date] | None:
+    """The oldest week since SC_COMPETITORS_FROM, up to the newest in the SQP table, whose pages are not all
+    saved yet, or (for a real run) saved but not all stored."""
+    from app import competitors
+
+    with powerbi.connect(settings) as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT MAX(reporting_date) AS d FROM {schema_quote(settings.db_table)}")
+        latest = cur.fetchone()["d"]
+        conn.rollback()
+    if isinstance(latest, dt.datetime):
+        latest = latest.date()
+    end = settings.sc_competitors_from + dt.timedelta(days=6)
+    while latest and end <= latest:
+        start = end - dt.timedelta(days=6)
+        plan = _scrape_plan(settings, start, end, asins)
+        folder = settings.data_dir / "sellercentral" / end.isoformat()
+        if any(not competitors.page_file(folder, a, q).is_file() for a, qs in plan.items() for q in qs):
+            return start, end
+        if not dry_run and _loaded_pages(settings, end) < len(list(folder.glob("*.json"))):
+            return start, end
+        end += dt.timedelta(days=7)
+    return None
+
+
+def _loaded_marker(settings: Settings, end: dt.date) -> Path:
+    return settings.state_dir / f"competitors_{end.isoformat()}.json"
+
+
+def _loaded_pages(settings: Settings, end: dt.date) -> int:
+    """How many saved pages of the week were stored in BrandAnalytics_Competitor_UK by the last successful load."""
+    import json
+
+    try:
+        return int(json.loads(_loaded_marker(settings, end).read_text(encoding="utf-8"))["loaded_pages"])
+    except (OSError, ValueError, KeyError):
+        return 0
+
+
+def _store(args: argparse.Namespace, settings: Settings, logger, start: dt.date, end: dt.date,
+           asins: list[str]) -> tuple[int, str]:
+    """Put the week's saved pages in BrandAnalytics_Competitor_UK (with --dry-run: only count what would be)."""
+    import json
+
+    from app import competitors
+
+    folder = settings.data_dir / "sellercentral" / end.isoformat()
+    pages, problems = [], []
+    for path in sorted(folder.glob("*.json")):
+        try:
+            pages.append(competitors.parse_capture(json.loads(path.read_text(encoding="utf-8"))))
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"{path.name}: {exc}")
+    if problems:
+        for line in problems[:30]:
+            logger.error("%s", line)
+        raise PipelineError(f"{len(problems)} saved page(s) could not be read; nothing stored")
+    rows = competitors.week_rows(pages, end)
+    if not rows:
+        print(f"{start}..{end}: no saved pages to store")
+        return 0, "nothing saved yet"
+    problems = competitors.check_rows(rows, set(asins))
+    if problems:
+        for line in problems[:30]:
+            logger.error("%s", line)
+        raise PipelineError(f"{len(problems)} row problem(s); nothing stored")
+    result = competitors.load_week(settings, rows, end, dry_run=args.dry_run)
+    if args.dry_run:
+        print(f"{start}..{end}: {len(pages)} pages, {len(rows)} rows -> {competitors.TABLE}: would insert "
+              f"{result['inserted']}, already there {result['already_stored']}; dry run: nothing written")
+        return 0, f"dry-run insert={result['inserted']} already={result['already_stored']}"
+    _loaded_marker(settings, end).write_text(json.dumps({
+        "loaded_pages": len(pages), "rows": len(rows), "inserted": result["inserted"],
+        "at": f"{dt.datetime.now():%Y-%m-%d %H:%M:%S}"}), encoding="utf-8")
+    print(f"{start}..{end}: {len(pages)} pages, {len(rows)} rows -> {competitors.TABLE}: inserted {result['inserted']}, "
+          f"already there {result['already_stored']}; table {result['total_before']} -> {result['total_after']} rows")
+    return 0, f"stored inserted={result['inserted']} already={result['already_stored']}"
 
 
 def _week(args: argparse.Namespace, settings: Settings, logger) -> tuple[dt.date, dt.date]:

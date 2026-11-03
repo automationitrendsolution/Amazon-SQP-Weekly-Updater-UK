@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 import pytest
 
@@ -190,3 +191,77 @@ def test_week_44_is_the_latest_week_on_the_monday_after_it(fake_amazon, monkeypa
     monkeypatch.setattr(run, "today_in", lambda tz: dt.date(2026, 11, 2))
     assert run.main(["--weekly"]) == 0
     assert "week 2026-10-25..2026-10-31" in capsys.readouterr().out
+
+
+def test_scrape_options_are_checked():
+    for argv in (["--weekly-scrape", "--apply"], ["--sc-login", "--dry-run"],
+                 ["--weekly", "--week", "2026-10-25", "2026-10-31"]):
+        with pytest.raises(SystemExit):
+            parse(argv)
+    assert parse(["--weekly-scrape", "--dry-run", "--week", "2026-10-25", "2026-10-31"]).week == ["2026-10-25",
+                                                                                                "2026-10-31"]
+
+
+@pytest.fixture
+def one_saved_page(monkeypatch):
+    """Week 44 with one keyword, its page already saved; capture_week must not be needed."""
+    from app import competitors
+    from tests.test_competitors import make_capture
+
+    settings = run.load_settings()
+    folder = settings.data_dir / "sellercentral" / "2026-10-31"
+    folder.mkdir(parents=True)
+    asin = load_asin_list(PROJECT_ROOT / "config" / "asins.txt").asins[0]
+    (folder / f"{asin}_dehumidifier.json").write_text(json.dumps(make_capture(asin=asin)), encoding="utf-8")
+    monkeypatch.setattr(competitors, "queries_for_week", lambda *a, **k: {asin: ["dehumidifier"]})
+    monkeypatch.setattr(competitors, "capture_week", lambda *a, **k: pytest.fail("all pages are saved"))
+    calls = []
+    monkeypatch.setattr(competitors, "load_week", lambda s, rows, end, dry_run=False: calls.append(dry_run) or
+                        {"inserted": len(rows), "already_stored": 0, "total_before": 0, "total_after": len(rows)})
+    return settings, calls
+
+
+def test_a_scrape_dry_run_for_a_week_counts_and_writes_nothing(one_saved_page, capsys):
+    settings, calls = one_saved_page
+    assert run.main(["--weekly-scrape", "--dry-run", "--week", "2026-10-25", "2026-10-31"]) == 0
+    assert calls == [True] and "would insert 1" in capsys.readouterr().out
+    assert not run._loaded_marker(settings, dt.date(2026, 10, 31)).exists()  # a dry run is not a load
+
+
+def test_a_scrape_for_a_week_stores_it(one_saved_page, capsys):
+    settings, calls = one_saved_page
+    assert run.main(["--weekly-scrape", "--week", "2026-10-25", "2026-10-31"]) == 0
+    assert calls == [False] and "inserted 1" in capsys.readouterr().out
+    assert run._loaded_pages(settings, dt.date(2026, 10, 31)) == 1
+
+
+def test_weekly_scrape_stores_a_scraped_week_that_was_not_stored_yet(monkeypatch):
+    # Without --week: a week whose pages are all saved but whose last load failed is stored by the next run.
+    import contextlib
+
+    settings = run.load_settings()
+    calls = []
+    monkeypatch.setattr(run, "_store", lambda args, s, logger, start, end, asins: calls.append((start, end)) or
+                        (0, "stored"))
+    monkeypatch.setattr(run, "_loaded_pages", lambda s, end: 0)
+
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *exc): pass
+        def execute(self, *a): pass
+        def fetchone(self): return {"d": dt.date(2026, 10, 31)}  # brandanalytics_uk.reporting_date is a DATE
+
+    class Conn:
+        def __enter__(self): return self
+        def __exit__(self, *exc): pass
+        def cursor(self): return Cursor()
+        def rollback(self): pass
+
+    monkeypatch.setattr(run.powerbi, "connect", lambda s, read_only=True: contextlib.nullcontext(Conn()))
+    from app import competitors
+    monkeypatch.setattr(competitors, "queries_for_week", lambda *a, **k: {"B0TESTAAAA": ["q"]})
+    folder = settings.data_dir / "sellercentral" / "2026-10-31"
+    folder.mkdir(parents=True)
+    (folder / "B0TESTAAAA_q.json").write_text('{"search_query": "q"}', encoding="utf-8")
+    assert run.main(["--weekly-scrape"]) == 0
+    assert calls == [(dt.date(2026, 10, 25), dt.date(2026, 10, 31))]

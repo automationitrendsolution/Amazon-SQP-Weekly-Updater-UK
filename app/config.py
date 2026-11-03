@@ -1,10 +1,12 @@
 """Settings from environment variables (the project's .env is loaded first).
 
 ``SPAPI_*``: the SP-API app and marketplace (Amazon.co.uk); ``DB_*``: the MySQL table; ``SQP_*``:
-which week is due and how long to wait for Amazon. Error messages name variables, never their values.
+which week is due and how long to wait for Amazon; ``SELLERCENTRAL_*`` / ``SC_*``: the Seller Central sign-in
+and competitor scraping. Error messages name variables, never their values.
 """
 from __future__ import annotations
 
+import datetime as dt
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -72,6 +74,16 @@ def _db_env(suffix: str, default: str | None = None) -> str | None:
     return _env(f"DB_{suffix}") or _env(f"POWERBI_DB_{suffix}", default)
 
 
+def _env_date(name: str, default: dt.date) -> dt.date:
+    raw = _env(name)
+    if raw is None:
+        return default
+    try:
+        return dt.date.fromisoformat(raw)
+    except ValueError:
+        raise ConfigurationError(f"{name} must be a date (YYYY-MM-DD)") from None
+
+
 def _env_int(name: str, default: int) -> int:
     raw = _env(name)
     if raw is None:
@@ -108,6 +120,16 @@ class Settings:
     poll_interval_seconds: int = 300
     poll_timeout_seconds: int = 22 * 60 * 60
     max_retries: int = 6
+    # Seller Central sign-in (app/sellercentral.py)
+    sc_email: str | None = field(default=None, repr=False)
+    sc_password: str | None = field(default=None, repr=False)
+    sc_totp_secret: str | None = field(default=None, repr=False)
+    # First week (its Sunday) the Search Query Details (competitor) scraping covers.
+    sc_competitors_from: dt.date = dt.date(2026, 10, 25)
+    # Browser for Seller Central: "chrome" (Google Chrome installed) or "chromium" (Playwright's own build);
+    # headless: no window, on a PC and on a server (false shows the window, e.g. to watch a problem).
+    sc_browser_channel: str = "chrome"
+    sc_headless: bool = True
 
     @property
     def report_dir(self) -> Path:
@@ -179,4 +201,10 @@ def load_settings(env_file: Path | None = None) -> Settings:
         poll_interval_seconds=_env_int("SQP_POLL_INTERVAL_SECONDS", 300),
         poll_timeout_seconds=_env_int("SQP_POLL_TIMEOUT_SECONDS", 22 * 60 * 60),
         max_retries=_env_int("SQP_MAX_RETRIES", 6),
+        sc_email=_env("SELLERCENTRAL_EMAIL") or _env("AMAZON_EMAIL"),
+        sc_password=_env("SELLERCENTRAL_PASSWORD") or _env("AMAZON_PASSWORD"),
+        sc_totp_secret=_env("SELLERCENTRAL_TOTP_SECRET"),
+        sc_competitors_from=_env_date("SC_COMPETITORS_FROM", dt.date(2026, 10, 25)),
+        sc_browser_channel=_env("SC_BROWSER_CHANNEL", "chrome").lower(),
+        sc_headless=_env("SC_HEADLESS", "true").lower() in ("1", "true", "yes"),
     )
