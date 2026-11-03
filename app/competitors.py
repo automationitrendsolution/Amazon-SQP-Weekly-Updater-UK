@@ -291,7 +291,7 @@ def capture_week(settings: Settings, end: dt.date, plan: dict[str, list[str]], o
 
     Pages saved earlier are skipped; ``max_new`` stops after that many newly opened pages (a part).
     """
-    from .sellercentral import HOME_URL, _close, _open, _settle, _signed_in, save_session
+    from .sellercentral import HOME_URL, SellerCentralError, _close, _open, _settle, _signed_in, save_session
 
     out_dir.mkdir(parents=True, exist_ok=True)
     saved = []
@@ -301,7 +301,7 @@ def capture_week(settings: Settings, end: dt.date, plan: dict[str, list[str]], o
         page.goto(HOME_URL, wait_until="domcontentloaded")
         _settle(page)
         if not _signed_in(page):  # never log in from here: that would make Amazon send an OTP
-            raise RuntimeError("the saved Seller Central sign-in has expired; run --sc-login (OTP) first")
+            raise SellerCentralError("the saved Seller Central sign-in has expired; run --sc-login (OTP) first")
         save_session(context, settings)  # keep the session file as fresh as the profile
         total =sum(len(q) for q in plan.values())
         done = opened = misses = 0
@@ -329,17 +329,17 @@ def capture_week(settings: Settings, end: dt.date, plan: dict[str, list[str]], o
                             captured_at=f"{dt.datetime.now():%Y-%m-%d %H:%M:%S}")
                 visible = " ".join(data["pageText"]).lower()
                 if "access required" in visible:
-                    raise RuntimeError("Seller Central shows 'Access Required' for Brand Analytics; stopped")
+                    raise SellerCentralError("Seller Central shows 'Access Required' for Brand Analytics; stopped")
                 if any(k in visible for k in ("captcha", "enter the characters", "unusual activity",
                                               "verify that you are", "/ap/signin")) or "/ap/" in page.url:
-                    raise RuntimeError(f"Seller Central asks for a check or sign-in ({page.url.split('?')[0]}); stopped "
-                                       "so the account is not pushed further")
+                    raise SellerCentralError(f"Seller Central asks for a check or sign-in ({page.url.split('?')[0]}); "
+                                             "stopped so the account is not pushed further")
                 if not has_table(data["rows"]):
                     misses += 1
                     log.warning("[%d/%d] %s / %r: table did not load; not saved (%d in a row)", done, total, asin,
                                 query, misses)
                     if misses >= 5:
-                        raise RuntimeError("5 pages in a row without the table; stopped")
+                        raise SellerCentralError("5 pages in a row without the table; stopped")
                     time.sleep(random.uniform(*pause))
                     continue
                 misses = 0
