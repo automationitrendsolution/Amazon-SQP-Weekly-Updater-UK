@@ -1,248 +1,364 @@
 # Amazon SQP Weekly Updater (UK)
 
-Keeps the Power BI database up to date with Amazon **Brand Analytics: Search Query Performance** data for the
-EcoNour UK store (Amazon.co.uk, 139 ASINs). It is the UK copy of `amazon-sqp-weekly-updater` (US): same code
-and checks, writing to the existing UK table `brandanalytics_uk`. It runs on a schedule and needs no manual work
-once it is set up.
+Every week, this job downloads the **Brand Analytics › Search Query Performance (SQP)** report for the
+EcoNour UK store (Amazon.co.uk) and writes it to the Power BI database. It runs on its own from cron, so the
+Power BI SQP data stays up to date with no manual work.
 
-| Data | Source | MySQL table (`powerbidb`) | Schedule |
-| --- | --- | --- | --- |
-| **Search Query Performance**: per ASIN and search query, the weekly funnel (impressions, clicks, basket adds, purchases) | Amazon **SP-API** report `GET_BRAND_ANALYTICS_SEARCH_QUERY_PERFORMANCE_REPORT`, marketplace `A1F83G8C2ARO7P` | `brandanalytics_uk` | Weekly, Monday |
+| | |
+| --- | --- |
+| **Data** | Per ASIN and search query: the weekly funnel of impressions, clicks, basket adds and purchases |
+| **Source** | Amazon SP-API report `GET_BRAND_ANALYTICS_SEARCH_QUERY_PERFORMANCE_REPORT`, Amazon.co.uk (`A1F83G8C2ARO7P`) |
+| **Destination** | MySQL `powerbidb.brandanalytics_uk` |
+| **Products** | 139 EcoNour ASINs, listed in [`config/asins.txt`](config/asins.txt) |
+| **Schedule** | Every Monday at 15:00 IST for the previous week, with backup runs Tuesday to Friday |
+| **Safety** | Only adds or corrects rows. It **never deletes**, never touches other weeks and never creates duplicates |
 
-This is the same data as Seller Central → Brand Analytics → Search Query Performance with the country set to
-United Kingdom (`country-id=gb`), one week at a time.
+This is the same data you see in Seller Central › Brand Analytics › Search Query Performance with the country
+set to *United Kingdom*, one week at a time.
 
-The updater only adds or corrects data. **It never deletes rows**, never touches other weeks, and never writes
-duplicates.
+---
 
-### Differences from the US updater
+## Contents
 
-| | US | UK |
-| --- | --- | --- |
-| Marketplace / SP-API endpoint | `ATVPDKIKX0DER` / `sellingpartnerapi-na` | `A1F83G8C2ARO7P` / `sellingpartnerapi-eu` |
-| Table | `2024BrandAnalytics` | `brandanalytics_uk` (its own column names; no `id`, `week`, `year`, `name`) |
-| ASINs | 60, 4 reports a week | 139, 8 reports a week |
-| Prices | USD only | GBP only |
-| Week decided in | US Pacific time | UK time (`Europe/London`) |
-| Schedule | Monday 15:00 IST | Monday 15:30 IST |
-| Competitor scraping (Seller Central) | Yes | Not included |
-
-Writing to the US table is refused (`DB_TABLE=2024BrandAnalytics` stops the run with exit 2).
+1. [How it works](#how-it-works)
+2. [Setting up the cron server](#setting-up-the-cron-server)
+3. [Configuration](#configuration)
+4. [Scheduling](#scheduling)
+5. [Running it by hand](#running-it-by-hand)
+6. [Amazon's limits and queue](#amazons-limits-and-queue)
+7. [How data is written](#how-data-is-written)
+8. [Monitoring and troubleshooting](#monitoring-and-troubleshooting)
+9. [Running on a Windows PC instead](#running-on-a-windows-pc-instead)
+10. [Project structure](#project-structure)
+11. [Technical reference](#technical-reference)
 
 ---
 
 ## How it works
 
 ```
-config/asins.txt (139 ASINs)
-      │
-      ▼
-Amazon SP-API ── 8 reports per week (Amazon allows ~18 ASINs per report), requested together
-      │          Amazon queues them; a run waits up to 22 h and later runs resume the same reports
-      ▼
-Validate ─────── same week, marketplace and report type; prices in GBP; bad rows rejected; batches combined
-      │
-      ▼
-Plan ─────────── compare with the week's rows already in brandanalytics_uk: insert / update / unchanged
-      │
-      ▼
-Write ────────── one transaction, then read back: nothing may be left to change
+ config/asins.txt (139 ASINs)
+        │
+        ▼
+ 1. Request    8 reports from Amazon (Amazon allows about 18 ASINs per report)
+        │
+        ▼
+ 2. Wait       Amazon builds the reports in its queue (usually minutes, sometimes hours)
+        │
+        ▼
+ 3. Check      right week, marketplace and report type; prices in GBP; every row valid
+        │
+        ▼
+ 4. Compare    with the rows already in brandanalytics_uk: insert / update / unchanged
+        │
+        ▼
+ 5. Write      in one transaction, then read back to confirm nothing is left to change
 ```
 
-- Weeks run **Sunday to Saturday**. A week counts as available **two days after it ends** (Monday, UK time).
-  Week 44 of 2026 is 25–31 October (`weekly-week=2026-10-31` in Seller Central).
-- A failed, incomplete or empty report is **never** written as an empty week.
+**Reporting weeks** run **Sunday to Saturday**. A week becomes available on the **Monday** after it ends
+(UK time). For example, week 44 of 2026 is 25–31 October, which Seller Central shows as
+`weekly-week=2026-10-31`.
+
+**It picks up where it left off.** Each report ID is saved as soon as Amazon accepts it. If a run is stopped
+or times out, the next run continues with the same reports instead of asking Amazon again.
+
+**Bad data is never written.** A failed, incomplete or empty report is never stored as an empty week. If a
+single row fails the checks, nothing for that week is written.
 
 ---
 
-## Requirements
+## Setting up the cron server
+
+### Requirements
 
 | | |
 | --- | --- |
-| Python | 3.13, managed with [uv](https://docs.astral.sh/uv/) |
-| Database | MySQL `powerbidb` with the user allowed to `SELECT`, `INSERT`, `UPDATE` (no `DELETE` needed) |
-| Amazon SP-API | A Login with Amazon app with the **Brand Analytics** role, authorised for the UK (Europe) seller account |
+| **Python** | 3.13, managed with [uv](https://docs.astral.sh/uv/) |
+| **Database** | MySQL `powerbidb`; the user needs `SELECT`, `INSERT` and `UPDATE` (no `DELETE`) |
+| **Amazon SP-API** | A Login with Amazon app with the **Brand Analytics** role, authorised for the UK (Europe) seller account |
 
----
+### Step by step
 
-## Installation
-
-### Windows (this PC)
-
-```powershell
-cd C:\Users\Admin\Desktop\amazon-sqp-weekly-updater-uk
-uv sync                                              # creates .venv with Python 3.13 and the packages
-copy .env.example .env                               # then fill in the values (see Configuration)
-.venv\Scripts\python.exe -B run.py --inspect         # read-only check of the table and the ASIN list
-.venv\Scripts\python.exe -B run.py --period 2026-10-25 2026-10-31 --dry-run   # week 44, preview only
-.venv\Scripts\python.exe -B run.py --period 2026-10-25 2026-10-31 --apply     # week 44, written
-```
-
-### Linux server
+**1. Get the code**
 
 ```bash
 git clone <repository-url> /data/cron/amazon-sqp-weekly-updater-uk
 cd /data/cron/amazon-sqp-weekly-updater-uk
-cp .env.example .env && chmod 600 .env    # then fill in the values
-uv sync
-uv run python run.py --inspect
 ```
 
-On Windows, run commands as `.venv\Scripts\python.exe -B run.py ...`; on Linux as `uv run python run.py ...`.
+**2. Add the settings file**
+
+`.env` holds passwords and tokens, so it is **not** in git. Copy it from a machine that already has it, or
+create it from the template:
+
+```bash
+cp .env.example .env      # then fill in the values (see Configuration)
+chmod 600 .env            # readable by this user only
+```
+
+To copy it from a Windows PC instead, run this on the PC:
+`scp .env root@<server>:/data/cron/amazon-sqp-weekly-updater-uk/.env`
+
+**3. Install the packages**
+
+```bash
+uv sync
+```
+
+**4. Check everything is connected**
+
+```bash
+uv run python run.py --inspect                              # can it reach MySQL? is the ASIN list right?
+uv run python run.py --period 2026-10-25 2026-10-31 --dry-run   # full trial run for one week; writes nothing
+```
+
+**5. Add the cron line.** See [Scheduling](#scheduling).
 
 ---
 
 ## Configuration
 
-All settings live in `.env` (copied from `.env.example`). `.env` holds passwords and tokens: keep it private
-and **never commit it**. Values still containing `replace-me` count as not set.
+All settings live in `.env`, created from [`.env.example`](.env.example). Never commit `.env`. Any value that
+still contains `replace-me` counts as not set.
 
 ### Amazon SP-API
 
-| Setting | Description |
+| Setting | What it is |
 | --- | --- |
-| `SPAPI_LWA_CLIENT_ID`, `SPAPI_LWA_CLIENT_SECRET` | Login with Amazon credentials of the SP-API app |
-| `SPAPI_LWA_REFRESH_TOKEN` | Refresh token from authorising the app for the UK seller account (`Atzr|...`) |
-| `SPAPI_MARKETPLACE_ID` | `A1F83G8C2ARO7P` (Amazon.co.uk), the default. The EU endpoint follows from it |
-| `SPAPI_ENDPOINT` | Optional override of the regional endpoint |
+| `SPAPI_LWA_CLIENT_ID` | The app's Login with Amazon client ID (`amzn1.application-oa2-client...`) |
+| `SPAPI_LWA_CLIENT_SECRET` | The app's client secret (`amzn1.oa2-cs.v1...`) |
+| `SPAPI_LWA_REFRESH_TOKEN` | Refresh token from authorising the app for the UK seller account (`Atzr\|...`) |
+| `SPAPI_MARKETPLACE_ID` | `A1F83G8C2ARO7P` (Amazon.co.uk). The Europe endpoint is chosen from it |
+| `SPAPI_ENDPOINT` | Optional. Overrides the regional endpoint |
 
-AWS keys and role ARNs are **not** needed: SP-API accepts LWA-only requests.
+The client ID and secret are in Seller Central › Apps & Services › Develop Apps › your app › *View* LWA
+credentials. AWS keys and role ARNs are **not** needed.
 
 ### Database
 
-| Setting | Description |
+| Setting | What it is |
 | --- | --- |
-| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` | MySQL server and login (`POWERBI_DB_*` names work too) |
-| `DB_NAME`, `DB_TABLE` | `powerbidb`, `brandanalytics_uk` |
+| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` | MySQL server and login. The `POWERBI_DB_*` names work too |
+| `DB_NAME` | `powerbidb` |
+| `DB_TABLE` | `brandanalytics_uk`. The US table `2024BrandAnalytics` is refused |
 
-### Behaviour
+### Behaviour (the defaults are fine)
 
-| Setting | Default | Description |
+| Setting | Default | What it does |
 | --- | --- | --- |
-| `EXPECTED_ASIN_COUNT` | `139` | Must equal the unique ASINs in `config/asins.txt`, otherwise writing is refused |
-| `SQP_TIMEZONE` | `Europe/London` | Decides which week is the latest completed one |
-| `SQP_AVAILABILITY_LAG_DAYS` | `2` | Days after Saturday before a week counts as available |
-| `SQP_CURRENCY` | `GBP` | The only currency the table's prices may be in; a report in another one is refused |
-| `SQP_POLL_INTERVAL_SECONDS` | `300` | How often a run checks Amazon's report status |
-| `SQP_POLL_TIMEOUT_SECONDS` | `79200` | How long one run waits for Amazon (22 h); the next run resumes |
-| `SQP_MAX_RETRIES` | `6` | Retries for throttled, failing or unreachable SP-API calls |
-| `SQP_DATA_DIR`, `SQP_LOG_DIR` | `data/`, `logs/` | Optional other locations |
-| `LOG_LEVEL` | `INFO` | `DEBUG` for more detail |
+| `EXPECTED_ASIN_COUNT` | `139` | Must match the number of unique ASINs in `config/asins.txt`, otherwise writing is refused |
+| `SQP_TIMEZONE` | `Europe/London` | Time zone used to decide which week is the latest finished one |
+| `SQP_AVAILABILITY_LAG_DAYS` | `2` | Days after Saturday before a week counts as available (2 = Monday) |
+| `SQP_CURRENCY` | `GBP` | The only currency accepted; a report in another currency is refused |
+| `SQP_POLL_INTERVAL_SECONDS` | `300` | How often to check on Amazon (5 minutes) |
+| `SQP_POLL_TIMEOUT_SECONDS` | `79200` | How long one run waits for Amazon (22 hours); the next run continues after that |
+| `SQP_MAX_RETRIES` | `6` | Quick retries for a busy or unreachable Amazon before waiting longer |
+| `SQP_DATA_DIR`, `SQP_LOG_DIR` | `data/`, `logs/` | Optional other folders |
+| `LOG_LEVEL` | `INFO` | Set to `DEBUG` for more detail |
 
 ### The ASIN list
 
-[`config/asins.txt`](config/asins.txt): one `ASIN  short name` per line. It was built on 2026-11-03 from
-`business_reports_Uk` for week 44: every child ASIN whose title starts with EcoNour (139). Names come from
-`product_categorisation_uk` (Child Short Name), else the title.
+[`config/asins.txt`](config/asins.txt) has one product per line: the ASIN, then a short name. Lines starting
+with `#` are ignored.
 
-- Eight ASINs are listed but commented out: seven supplement listings that are not EcoNour, and one with no
-  title. SQP only covers your own brand's ASINs, and an ASIN Amazon does not allow can fail a whole report.
-- To add or remove an ASIN, edit the file and set `EXPECTED_ASIN_COUNT` to the new number of unique ASINs.
-- Names are for reference only: `brandanalytics_uk` has no name column.
-
----
-
-## Usage
-
-| Task | Command |
-| --- | --- |
-| Inspect the table and its ASINs (read-only) | `run.py --inspect` |
-| Preview a week: fetch, validate, show what would change (writes nothing) | `run.py --period 2026-10-25 2026-10-31 --dry-run` |
-| Write a week (backfill) | `run.py --period 2026-10-25 2026-10-31 --apply` |
-| Latest available week, written (what the schedule runs) | `run.py --weekly --apply` |
-| Ask Amazon again instead of reusing downloaded reports | add `--refetch` |
-| Write only the batches already downloaded (rest later) | add `--downloaded-only` (with `--period`) |
-| Change existing rows only, insert nothing | add `--no-insert` (with `--period`) |
-| All options | `run.py --help` |
-| Run the tests | `uv run python -B -m pytest` |
-
-A dry run saves `data/reports/sqp_<start>_<end>_records.csv` (the validated rows) and `..._plan.csv` (every
-insert and every changed value, old → new) for review. The `--apply` run reuses the dry run's downloads.
+- **To add or remove a product**, edit the file, then set `EXPECTED_ASIN_COUNT` in `.env` to the new number of
+  unique ASINs. This check stops an accidentally emptied or half-edited file from being used.
+- The list was built on 2026-11-03 from `business_reports_Uk` for week 44: every child ASIN whose title starts
+  with *EcoNour*. Eight more are listed but commented out (seven non-EcoNour supplements and one with no
+  title). SQP only covers your own brand, and an ASIN Amazon won't accept can make a whole report fail.
+- The names are for reference only; the table has no name column.
 
 ---
 
 ## Scheduling
 
-Run the job in **one place only** (the server **or** a Windows PC), never both.
+Run the job in **one place only**: the cron server **or** a Windows PC, never both.
 
-### Linux cron
+The job runs **Monday at 15:00 IST** for the week that ended on Saturday. Runs from **Tuesday to Friday** at the
+same time are backups. They only do something if Amazon was slow and the week isn't written yet. Once the week
+is written, a backup run sees that and stops at once.
 
-Check the server's time zone with `timedatectl`, then add to `crontab -e` (see
-[`deploy/crontab.example`](deploy/crontab.example)):
+### Cron (server clock on New York time)
+
+India doesn't change its clocks but New York does, so 15:00 IST is a different New York hour in summer and
+winter. First check which Linux the server runs: `cat /etc/os-release`.
+
+**Amazon Linux, RHEL, CentOS or Rocky:** use `CRON_TZ` and the job stays at 15:00 IST all year.
 
 ```cron
 MAILTO=""
-# Server clock on IST: Monday 15:30 IST; Tue–Fri are backups that stop at once when the week is written
-30 15 * * 1-5 cd /data/cron/amazon-sqp-weekly-updater-uk && /root/.local/bin/uv run --no-sync python run.py --weekly --apply --quiet >> logs/cron-output.log 2>&1
-# Server clock on UTC: 0 10 * * 1-5 ...same command...
+CRON_TZ=Asia/Kolkata
+0 15 * * 1-5 cd /data/cron/amazon-sqp-weekly-updater-uk && /root/.local/bin/uv run --no-sync python run.py --weekly --apply --quiet >> logs/cron-output.log 2>&1
 ```
 
-### Windows Task Scheduler
+**Ubuntu or Debian:** their cron ignores `CRON_TZ`, so write the time in New York time.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File deploy\install_task.ps1           # Monday 15:30 (+ Tue–Fri backups)
-powershell -ExecutionPolicy Bypass -File deploy\install_task.ps1 -Remove   # unregister
+```cron
+MAILTO=""
+# 15:00 IST = 04:30 New York in winter (EST). From mid-March to early November (EDT) change 30 4 to 30 5.
+30 4 * * 1-5 cd /data/cron/amazon-sqp-weekly-updater-uk && /root/.local/bin/uv run --no-sync python run.py --weekly --apply --quiet >> logs/cron-output.log 2>&1
 ```
 
-The task is called **Amazon SQP Weekly Updater UK**, separate from the US task. The PC must stay on with the
-user signed in to Windows; a locked screen is fine.
+Add the line with `crontab -e`. Cron has a minimal `PATH`, so use the full path to `uv` (find it with
+`which uv`). A copy of these lines is in [`deploy/crontab.example`](deploy/crontab.example).
+
+| Cron time | Meaning |
+| --- | --- |
+| `0 15 * * 1-5` | 15:00, Monday to Friday |
+| `0 15 * * 1` | 15:00, Monday only (no backup runs) |
+
+---
+
+## Running it by hand
+
+On the server, start every command with `uv run python run.py`. On Windows, use
+`.venv\Scripts\python.exe -B run.py`.
+
+| I want to… | Command |
+| --- | --- |
+| Check the database connection and ASIN list (read-only) | `run.py --inspect` |
+| Try a week without writing anything | `run.py --period 2026-10-25 2026-10-31 --dry-run` |
+| Write a specific week (for example, to fill a gap) | `run.py --period 2026-10-25 2026-10-31 --apply` |
+| Do exactly what the schedule does | `run.py --weekly --apply` |
+| Ask Amazon again instead of reusing downloaded reports | add `--refetch` |
+| See all options | `run.py --help` |
+| Run the automated tests | `uv run python -B -m pytest` |
+
+`--period` always takes a **Sunday** and the following **Saturday**.
+
+**Review a dry run before writing.** A dry run saves two files in `data/reports/`:
+
+- `sqp_<start>_<end>_records.csv`: every row Amazon sent, after the checks
+- `sqp_<start>_<end>_plan.csv`: every insert and every changed value (old → new)
+
+A following `--apply` for the same week reuses the downloaded reports, so Amazon isn't asked twice.
+
+<details>
+<summary>Advanced options</summary>
+
+| Option | Use |
+| --- | --- |
+| `--downloaded-only` (with `--period`) | Write only the reports already downloaded; the rest are left for later |
+| `--no-insert` (with `--period`) | Update existing rows only; new search queries are listed, not inserted |
+| `--quiet` | Show only warnings and errors on screen (used by cron) |
+| `--no-lock` | Skip the "one run at a time" lock (only when you are watching) |
+| `--env-file PATH` | Use another settings file |
+
+</details>
+
+---
+
+## Amazon's limits and queue
+
+Two things can make a run take a while. Both are normal and handled automatically.
+
+**1. Amazon limits how fast new reports can be requested.** It accepts a few at once, then roughly one
+every two minutes. When the limit is reached Amazon answers **HTTP 429 / `QuotaExceeded`**. The job then waits
+(5 minutes at a time) and tries again, for as long as the run lasts. In the log it looks like this:
+
+```
+WARNING POST .../reports -> HTTP 429 (request id ...); retry 1 in 2s
+WARNING Amazon's quota for new reports is used up; trying again in 300s
+```
+
+This doesn't block or harm the account. The limit is shared by every program that uses the same SP-API app
+and seller account, so other jobs can use it up.
+
+**2. Amazon builds reports in a queue.** Each report goes through `IN_QUEUE` → `IN_PROGRESS` → `DONE`. That
+usually takes about a minute, but on busy days it can take hours. The job checks every 5 minutes and waits up
+to 22 hours. If that runs out, the next day's backup run continues with the same reports.
+
+> **Tip:** don't stop a run because of 429 warnings. If you do, nothing is lost: running the same command
+> again continues with the reports Amazon has already accepted.
 
 ---
 
 ## How data is written
 
-`brandanalytics_uk` has no key column at all, so rows are matched by **(reporting_date, ASIN, search query)**,
-the query compared without case and extra spaces.
+`brandanalytics_uk` has no key column, so rows are matched by **reporting date + ASIN + search query**. The
+search query is compared ignoring upper/lower case and extra spaces.
 
-| Situation | Result |
+| Situation | What happens |
 | --- | --- |
-| Row exists, Amazon's numbers differ | Only the changed columns are updated |
-| Row exists, numbers equal | Unchanged |
-| New search query | Inserted with `reporting_date` and `asin` |
-| Row in the table but not in Amazon's report | Kept |
-| Amazon leaves a value empty | The table's value is kept |
-| Key found on several rows | Skipped and listed, never guessed |
+| The row exists and Amazon's numbers differ | Only the changed columns are updated |
+| The row exists and the numbers are the same | Left unchanged |
+| A new search query | Inserted |
+| A row is in the table but not in Amazon's report | **Kept** (never deleted) |
+| Amazon leaves a value empty | The table's existing value is kept |
+| The same key is found on several rows | Skipped and listed; the program never guesses |
 
-- `reporting_date` = the week's Saturday (a date): week 44 of 2026 is `2026-10-31`.
-- A row is updated by its date, ASIN and search query **exactly as stored**, and only if that finds exactly one
-  row; otherwise the whole week is rolled back.
-- Everything happens in **one transaction**; any error rolls the whole week back. The week is read back
-  afterwards and must show nothing left to change.
-- Shares and rates are stored as percentages with 2 decimals (`0.68` = 0.68 %), prices in GBP with 2 decimals.
-  Two columns are whole numbers in the table, `basket_adds_asin_share_percent` and
-  `purchases_asin_share_percent`, so those shares are rounded (16.67 % → `17`), as in the rows already there.
-  If they are ever changed to `FLOAT`, the updater keeps the decimals on its own.
-- The `*_shipping_percent` columns hold counts (same-day / 1-day / 2-day), as Seller Central's download does.
-- The table's first week (2026-02-21, loaded by hand) has 107 search queries stored twice. They are left as
-  they are; that week is only touched if you run it again, and then the doubled queries are skipped.
+- **One transaction.** Any error rolls back the whole week, and the table stays exactly as it was. After
+  writing, the week is read back and must show nothing left to change.
+- **`reporting_date`** is the week's Saturday: week 44 of 2026 is stored as `2026-10-31`.
+- **Percentages** are stored with 2 decimals (`0.68` means 0.68 %), **prices** in GBP with 2 decimals.
+  `basket_adds_asin_share_percent` and `purchases_asin_share_percent` are whole-number columns, so those two
+  are rounded (16.67 % → `17`), matching the rows already in the table.
+- The `*_shipping_percent` columns hold **counts** (same-day / 1-day / 2-day), the same as Seller Central's
+  download.
+- **Missing ASINs:** an ASIN with no search activity in a week has no rows. The run summary lists them as
+  "missing". This is normal and is not an error.
+- The table's first week (2026-02-21, loaded by hand) has 107 search queries stored twice. They are left
+  as they are; if that week is ever run again, those queries are skipped.
 
 ---
 
 ## Monitoring and troubleshooting
 
-| Log | Content |
+### Logs
+
+| File | What's in it |
 | --- | --- |
-| `logs/cron.log` | One line per run: time, exit code, command, summary (rows written, …) |
-| `logs/sqp_updater.log` | Full details: report IDs and statuses, warnings (rotated daily, 30 days kept) |
-| `logs/cron-output.log` | Console output of cron runs |
+| `logs/cron.log` | **Start here.** One line per run: time, exit code and a summary (rows inserted, updated…) |
+| `logs/sqp_updater.log` | Full detail: report IDs, statuses, warnings. Rotated daily, 30 days kept |
+| `logs/cron-output.log` | Screen output from cron runs |
+
+A healthy week looks like this in `logs/cron.log`:
+
+```
+2026-11-03 14:48:24 exit=0 --weekly --apply | 2026-10-25..2026-10-31 ... rows=2090 rejected=0 inserted=2090 updated=0
+```
+
+### Exit codes
 
 | Code | Meaning | What to do |
 | --- | --- | --- |
-| 0 | Success | – |
-| 1 | Unexpected error | Read `logs/sqp_updater.log` |
-| 2 | A setting is missing or wrong (also: the US table as `DB_TABLE`) | Read the message; fix `.env` |
-| 3 | MySQL unreachable, table or column missing, or a write was rolled back (**nothing changed**) | Check the `DB_*` settings and the message |
-| 5 | Not a Sunday–Saturday week, or the week is not complete | Fix `--period`; `--weekly` picks a valid week itself |
-| 6 | SP-API request failed, or a report was not ready in time | Timeout: the next run resumes. HTTP 403: the app needs the Brand Analytics role for the UK account |
-| 7 | Report for another week/marketplace, a price not in GBP, or rejected rows | Nothing written; the raw JSON is in `data/reports/` |
-| 11 | Another run was still going | Nothing; the next run continues |
+| **0** | Success | Nothing |
+| **1** | Unexpected error | Read `logs/sqp_updater.log` |
+| **2** | A setting is missing or wrong | Read the message and fix `.env` |
+| **3** | Database problem: MySQL unreachable, or the write was rolled back (**nothing changed**) | Check the `DB_*` settings and the message |
+| **5** | Not a Sunday–Saturday week, or the week isn't finished | Fix the `--period` dates; `--weekly` picks the week itself |
+| **6** | Amazon request failed, or the report wasn't ready in time | A timeout continues on the next run. HTTP 403: the app needs the Brand Analytics role |
+| **7** | The report was for the wrong week or marketplace, not in GBP, or had invalid rows | Nothing was written; the raw report is in `data/reports/` |
+| **11** | Another run was still going | Nothing; the next run continues |
+
+### Common questions
 
 | Symptom | Cause and fix |
 | --- | --- |
-| A report ends `FATAL` | Often an ASIN not covered by your brand registration. Comment it out in `config/asins.txt`, lower `EXPECTED_ASIN_COUNT`, run again |
-| Week takes days to arrive | Amazon processes SQP reports per account in one queue; the US and UK runs, or another program using the same app, share it. The updater resumes on its own |
-| New weeks not visible in Power BI | The data is in MySQL; refresh the Power BI dataset |
-| Start a week over | Delete `data/state/sqp_<start>_<end>.json` or use `--refetch` |
+| Lots of `HTTP 429` warnings | Amazon's request limit. Normal: the job waits and continues. See [Amazon's limits and queue](#amazons-limits-and-queue) |
+| A report ends with `FATAL` | Often an ASIN not covered by your brand registration. Comment it out in `config/asins.txt`, lower `EXPECTED_ASIN_COUNT`, run again |
+| The week still isn't written on Friday | Amazon was very slow. The next Monday moves on to the new week, so write the missed one by hand with `--period … --apply` |
+| New data isn't in Power BI | The data is in MySQL; refresh the Power BI dataset |
+| I want to redo a week from scratch | Run it with `--refetch`, or delete `data/state/sqp_<start>_<end>.json` |
+| The credentials were exposed or changed | Create a new client secret in Seller Central and update `.env` |
+
+---
+
+## Running on a Windows PC instead
+
+Use this only if the job is **not** on the cron server.
+
+```powershell
+cd C:\Users\Admin\Desktop\amazon-sqp-weekly-updater-uk
+uv sync
+copy .env.example .env                                    # then fill in the values
+.venv\Scripts\python.exe -B run.py --inspect
+powershell -ExecutionPolicy Bypass -File deploy\install_task.ps1           # schedule: Monday 15:00 + Tue–Fri backups
+powershell -ExecutionPolicy Bypass -File deploy\install_task.ps1 -Remove   # remove the schedule
+```
+
+The task is called **Amazon SQP Weekly Updater UK**. The PC must be on with the user signed in (a locked
+screen is fine). If the PC was off at the scheduled time, the run starts as soon as it is back on.
 
 ---
 
@@ -251,25 +367,38 @@ the query compared without case and extra spaces.
 | Path | Purpose |
 | --- | --- |
 | `run.py` | Command-line entry point (`--help` lists every option) |
-| `app/spapi.py` | SP-API: access token, reports, polling, download, retries, resume |
-| `app/report.py` | Validates the report JSON, combines batches, finds missing ASINs |
-| `app/powerbi.py` | MySQL: inspection, the week's plan, the transactional write |
-| `app/schema.py` | Report fields and their table columns |
-| `app/schedule.py` | Sunday–Saturday weeks, latest available week, run lock |
+| `app/spapi.py` | Amazon SP-API: sign-in, requesting, waiting for and downloading reports, retries, resuming |
+| `app/report.py` | Checks the report and combines the 8 reports into one week |
+| `app/powerbi.py` | MySQL: inspection, the change plan, the transactional write |
+| `app/schema.py` | Report fields and the table columns they go to |
+| `app/schedule.py` | Sunday–Saturday weeks, the latest available week, the one-run-at-a-time lock |
 | `app/asins.py` | Reads `config/asins.txt` |
 | `app/config.py`, `app/exceptions.py`, `app/logging_config.py` | Settings, exit codes, logging |
 | `config/asins.txt` | The 139 UK ASINs with short names |
-| `deploy/` | Cron line and Windows Task Scheduler setup |
-| `data/` (not in git) | Downloaded reports and run state |
+| `deploy/` | Cron lines and the Windows Task Scheduler script |
+| `data/` (not in git) | Downloaded reports and saved run state |
 | `logs/` (not in git) | Run history and logs |
-| `tests/` | Automated tests (no Amazon or real database needed) |
+| `tests/` | Automated tests (no Amazon account or real database needed) |
+
+### Differences from the US updater
+
+This project is the UK copy of `amazon-sqp-weekly-updater` (US). The code and checks are the same.
+
+| | US | UK |
+| --- | --- | --- |
+| Marketplace / endpoint | `ATVPDKIKX0DER` / `sellingpartnerapi-na` | `A1F83G8C2ARO7P` / `sellingpartnerapi-eu` |
+| Table | `2024BrandAnalytics` | `brandanalytics_uk` (own column names; no `id`, `week`, `year`, `name`) |
+| ASINs | 60, in 4 reports | 139, in 8 reports |
+| Currency | USD | GBP |
+| Week decided in | US Pacific time | UK time |
+| Competitor scraping | Yes | No |
 
 ---
 
 ## Technical reference
 
 <details>
-<summary>SP-API report fields → <code>brandanalytics_uk</code> columns</summary>
+<summary>Report fields → <code>brandanalytics_uk</code> columns</summary>
 
 | Report field | Column | Report field | Column |
 | --- | --- | --- | --- |
@@ -288,26 +417,26 @@ the query compared without case and extra spaces.
 | total{SameDay,OneDay,TwoDay}ShippingClickCount | clicks_{same_day,1d,2d}_shipping_percent | asinMedianPurchasePrice | purchases_asin_price_median |
 | | | total{SameDay,OneDay,TwoDay}ShippingPurchaseCount | purchases_{same_day,1d,2d}_shipping_percent |
 
-Rows with an unrequested ASIN, a missing search query, a negative or fractional count, or no
-`searchQueryVolume` / `asinImpressionCount` are rejected and the week is not written. Exact duplicates are
-dropped; conflicting duplicates refuse the report.
+A row is rejected, and the week not written, if it has an ASIN that wasn't requested, no search query, a
+negative or fractional count, or no `searchQueryVolume` / `asinImpressionCount`. Exact duplicate rows are
+dropped; conflicting duplicates make the whole report refused.
 
 </details>
 
 <details>
 <summary>SP-API calls</summary>
 
-1. `POST https://api.amazon.com/auth/o2/token` with the refresh token → access token (renewed before it expires).
+1. `POST https://api.amazon.com/auth/o2/token` with the refresh token → access token (renewed before it
+   expires).
 2. `POST https://sellingpartnerapi-eu.amazon.com/reports/2021-06-30/reports` with `marketplaceIds:
-   [A1F83G8C2ARO7P]`, `reportPeriod: WEEK` and up to 200 characters of ASINs (8 reports for 139 ASINs), all
-   created before waiting.
-3. `GET /reports/2021-06-30/reports/{id}` every `SQP_POLL_INTERVAL_SECONDS` until `DONE`. `FATAL` reports carry
-   an error document, which is logged.
-4. `GET /reports/2021-06-30/documents/{id}` → pre-signed URL; the (gzip) JSON is downloaded to `data/reports/`.
+   [A1F83G8C2ARO7P]`, `reportPeriod: WEEK` and up to 200 characters of ASINs (8 reports for 139 ASINs). All
+   reports are requested before waiting. On `QuotaExceeded` the request is repeated every
+   `SQP_POLL_INTERVAL_SECONDS` until the run's time limit.
+3. `GET /reports/2021-06-30/reports/{id}` every `SQP_POLL_INTERVAL_SECONDS` until `DONE`. A `FATAL` report
+   carries an error document, which is logged.
+4. `GET /reports/2021-06-30/documents/{id}` → a pre-signed URL; the (gzip) JSON is saved to `data/reports/`.
 
-HTTP 429 and 5xx responses and network errors are retried with exponential backoff. Report IDs are kept in
-`data/state/`, so an interrupted run resumes the same reports.
+HTTP 429, 5xx and network errors are retried with exponential backoff. Report IDs are kept in `data/state/`,
+so an interrupted run continues with the same reports.
 
 </details>
-#   A m a z o n - S Q P - W e e k l y - U p d a t e r - U K  
- 

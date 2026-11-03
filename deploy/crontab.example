@@ -1,0 +1,13 @@
+# Amazon SQP updater (UK) on the Linux cron server. Install with `crontab -e`. Absolute paths: cron's PATH is minimal.
+# Monday 15:00 IST for the week that ended on Saturday; Tue-Fri are backups (they stop at once when the week is written).
+# The server clock is on New York time. Run the job in ONE place only (not also on the Windows PC).
+# Each run appends one line to logs/cron.log; details are in logs/sqp_updater.log.
+MAILTO=""
+
+# Amazon Linux / RHEL / CentOS / Rocky (cronie): CRON_TZ keeps it at 15:00 IST all year.
+CRON_TZ=Asia/Kolkata
+0 15 * * 1-5 cd /data/cron/amazon-sqp-weekly-updater-uk && /root/.local/bin/uv run --no-sync python run.py --weekly --apply --quiet >> logs/cron-output.log 2>&1
+
+# Ubuntu / Debian (CRON_TZ is ignored): use New York time instead of the two lines above.
+# 15:00 IST = 04:30 EST (early Nov - mid Mar); change to `30 5` for EDT (mid Mar - early Nov).
+# 30 4 * * 1-5 cd /data/cron/amazon-sqp-weekly-updater-uk && /root/.local/bin/uv run --no-sync python run.py --weekly --apply --quiet >> logs/cron-output.log 2>&1

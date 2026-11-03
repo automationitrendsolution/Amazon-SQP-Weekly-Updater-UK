@@ -1,0 +1,156 @@
+# The ASINs the UK SQP report is requested for: ASIN, then a short product name.
+# Taken on 2026-11-03 from powerbidb.business_reports_Uk, week 44 (2026-10-25..2026-10-31): every child ASIN
+# whose title starts with EcoNour (139), busiest first. Names come from product_categorisation_uk
+# (Child Short Name), else the title. Names are reference only (brandanalytics_uk has no name column).
+# An ASIN listed twice is requested once.
+# EXPECTED_ASIN_COUNT is compared with the number of unique ASINs. Lines starting with # are ignored.
+B0FY38DJS3  Dehumidifier 12L
+B0GXWCW638  Memory Foam Seat Cushion for Coccyx Sitting
+B0FYN66184  Heater 11" Oval
+B0CKBW1R3R  Ironing Board - Green
+B0DNQFK8GF  Donut Cushion
+B0C78BCP52  Ironing Board - Blue
+B0D2XZBYJJ  Iron Steam Black
+B0DZ6YVBH5  Handheld Vacuum - Gun
+B0C68ZQJMX  Gel Cushion
+B0FYN82TB8  Heater 16" Oval
+B07K6YKZBK  Snow cover Standard
+B0FLV6D7VL  Heater 13" Digital
+B0C787BTZ1  Dog Poo Bags -540 counts
+B0CKTLW7QX  Jawline 3 Pack
+B0D2Y1NF3M  Iron Steam Green
+B0G3DS4PHQ  28" Bladeless Fan
+B0G3DW1PQN  2 in 1 Bladeless Tower fan with Heater & Cooler
+B0FLV3S9T5  Heater 16" Square
+B0DZD46S9R  Handheld Vacuum - Alien Tech
+B0CF29RJTJ  18 Plus
+B0H7HH8NHP  Air Purifier for Home HEPA Filter 190m³/h
+B0DJP9Z2QV  Dog Seat Cover
+B0FYN6NVC9  Heater 13" Analog
+B0FY36WV1D  Dehumidifier 20L
+B0H2F2P2P6  Smart Leafless Air Purifier Fan – White
+B0GZZ5XDZ8  Desk Fan
+B09DVHT9C4  Ice Scraper Black
+B0CKBX258B  Ironing Board Covers 124 x 38 cm Extra Thick 7mm P
+B0D4QN23LM  Ironing Board - Blue Cross Flowers
+B0H7HZV53C  Smart Humidifier for Bedroom Baby
+B0D4QNK78Z  Ironing Board - Grey
+B0D4QSMGG8  Ironing Board - Grey
+B0D4QW95CC  Ironing Board - Green Tropical Leaves
+B0DBVN4ZZ2  ICICLE WW 1500 LED
+B0953VSDL7  Semi Truck Sunshade
+B0H7HY92J7  Mist Humidifier 2.6L
+B0CL6KR7XH  Cluster WW 1500 LED
+B0DTPH69KS  42" Tower Fan
+B0FXLD61KB  ICICLE MC 1000 LED
+B0CL6HTX3B  Cluster WW 2000 LED
+B0D5YL1BVV  ICICLE WW 1000 LED
+B0FXXP3FTC  Tree Light MC 200 LED
+B0CL6GGJSN  Cluster WW 720 LED
+B0DBVN6GCZ  ICICLE WW 500 LED
+B0DGGPSLXH  ICICLE CW 1000 LED
+B0BZKWWGGD  Secateurs
+B0FXLC7HQW  RGB 100FT LED
+B0BZD997HN  Shower Head Powerful Flow with Beads Filter Pressu
+B0D5YJDVPQ  ICICLE WW 240 LED
+B0FXB4KVJH  Ladder WW 200 LED
+B0CL6HCSZ8  Cluster WW 1000 LED
+B0D9BDBRJS  Cluster CW 2000 LED
+B0FXLJ529M  ICICLE MC 2000 LED
+B0D97S5ZBL  Cluster CW 480 LED
+B0FXL9KKBT  ICICLE CW 240 LED
+B0FXLFPZJ1  RGB 50FT LED
+B0D5YK4YDH  ICICLE WW 2000 LED
+B0D98M2ZMW  Cluster MC 1000 LED
+B0DGGPP3RX  ICICLE CW 1500 LED
+B0FXLHHPSG  ICICLE CW 500 LED
+B0FXLHVBCH  RGB 150FT LED
+B0FXLK52SF  ICICLE CL 2000 LED
+B0FXLLJ97G  ICICLE CW 500 LED
+B0FXLLVYWX  Tree Light WW 750 LED
+B0GYYSNKLL  Portable Handheld Fan
+B01I90VP0G  Sunshade Small
+B0CL6GQLJQ  Cluster WW 480 LED
+B0D5YMPBWQ  ICICLE WW 360 LED
+B0DGGSWWQL  ICICLE CW 360 LED
+B0FH5LQRQY  Baubles 50Pcs - Black
+B0GYXRGGJR  Portable Handheld Fan
+B01KIFITRM  Sunshade XL
+B0D98HSTG7  Christmas Tree Cluster Lights
+B0FH5HM8ZS  Baubles 50Pcs - Blue
+B0FH5P7BCJ  Baubles 100Pcs - Red & Gold
+B0FXGV3351  Ladder Light Warm White 400 LED
+B0FXLKQ1Q6  Cluster WW 2000 LED
+B01KIFISX2  Sunshade Standard
+B0C7886SXB  Bamboo Cutlery Drawer Organiser
+B0D97RGB59  Cluster CW 720 LED
+B0D97WDB8Z  Cluster CW 1000 LED
+B0D98JSX77  Cluster MC 2000 LED
+B0DF79DNYQ  Retractable Car Charger PD30W
+B0FXLJNN9P  Tree Light CW 750 LED
+B0FXLKLM8V  Cluster CW 2000 LED
+B0FXLLH2XV  Cluster WW 1500 LED
+B0FXLMSDTJ  Cluster WW 500 LED
+B0FXXJCXR9  Tree Light MC 400 LED
+B01M4NRZAG  Window Sunshade Medium
+B079DXQZ7L  Windowsox Small
+B08RZ5R3BT  Window Sunshade Large
+B09Q3K1R47  Car Windshield Sun Shade
+B0BS6F5NTY  2-Piece Foldable Car Front Window Sun Shade
+B0CGHQYLHP  Shovel Blue
+B0D98DBV6T  Cluster MC 480 LED
+B0DF77Z78M  Retractable Car phone Charger Fast Charge .180° Ad
+B0DF78XXX5  Super Fast 4-in-1 Retractable Dual C Type Car Char
+B0FH5K11TD  Baubles 100Pcs - Red
+B0FXLBW9ZB  ICICLE MC 1500 LED
+B0FXLKPW9M  Tree Light CW 200 LED
+B0FXLKT42W  Tree Light CW 500 LED
+B0FXLL1SXC  Tree Light MC 1000 LED
+B0FXLLQVK5  Cluster CW 1500 LED
+B0FXLNHP12  Tree Light CW 1500 LED
+B08423LQZ3  2-Piece square Sun Shade - Truck
+B08RZB4F63  Roller shade Standard
+B09KY3Y971  Umbrella Sunshade Small
+B0BKVZ9KJY  2 Pack - Orange and Red
+B0CFY1RTVT  Jump Starter - 12v
+B0CJJ73CP4  Chair Leg 32 Pcs
+B0D9BDDT9D  Cluster MC 720 LED
+B0DDQ41JT4  Cluster CW 1500 LED
+B0DGGQRYSB  ICICLE CW 2000 LED
+B0DNDY54V3  Car Windshield Snow Cover
+B0FH5JV64Q  Baubles 50Pcs - Gold
+B0FH5L9MZ7  Baubles 50Pcs - Red
+B0FPD3WFT3  Iron Steamer
+B0FXLGF3HS  Tree Light CW 100 LED
+B0FXLGH7H6  Tree Light WW 1500 LED
+B0FXLGJFRD  ICICLE MC 240 LED
+B0FXLGL8RJ  Tree Light WW 200 LED
+B0FXLGSGGW  Tree Light WW 1000 LED
+B0FXLHTP1Y  Tree Light WW 750 LED
+B0FXLK9C3T  Cluster CW 500 LED
+B0FXLKQCQ7  Cluster MC 500 LED
+B0FXLL3Q56  Tree Light WW 1000 LED
+B0FXLM9MCY  Tree Light CW 1000 LED
+B0FXLMFGWX  Tree Light MC 750 LED
+B0FXLMVLDH  Cluster CW 750 LED
+B0FXLMY2KC  Cluster CW 1000 LED
+B0FXXKM6S8  Tree Light WW 200 LED
+B0G2MDWWFY  Heater
+B0GYXZ8VVX  Portable Handheld Fan
+B0H62P158Q  Handheld Vacuum Cleane
+B0H89KVSZ9  Seat cushion
+B0HG5K4XXR  Space Heater for Home
+B0HNWK46P1  Ironing Board Covers PA
+B0HPGCGG46  Ironing Board Covers 2 PA New
+B0FXLKVC4P  String Lights 1500 LED 100m String Tree Lights for
+
+# Left out: not EcoNour (another brand) or no title. SQP only covers your own brand's ASINs, and an ASIN
+# Amazon does not allow can fail the whole report. Remove the # to add one, and raise EXPECTED_ASIN_COUNT.
+# B0H8Z8TJDX  Multivitamin Gummies for Adults
+# B0H8Z7R6C4  Creatine Monohydrate Tablets
+# B0H8YYDC4F  Magnesium Complex 5 in 1 Capsules
+# B0H8ZL42X2  Men's Vitality Capsules
+# B0H8ZB41GD  Creatine Monohydrate Powder 1kg –10+ Months Supply
+# B0H8Z17JXJ  Marine Collagen Capsules
+# B0H8YZHXMT  Bio-Cultures Complex
+# B0HNWRM9WD  Name Not Found
